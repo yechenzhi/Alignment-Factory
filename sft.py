@@ -6,7 +6,7 @@ import torch
 
 from transformers import AutoTokenizer, HfArgumentParser, AutoModelForCausalLM, BitsAndBytesConfig, TrainingArguments
 from datasets import load_dataset
-from peft import LoraConfig
+from peft import AutoPeftModelForCausalLM, LoraConfig
 from trl import SFTTrainer
 
 @dataclass
@@ -73,7 +73,7 @@ class ScriptArguments:
         default="cosine",
         metadata={"help": "Learning rate schedule. Constant a bit better than cosine, and has advantage for analysis"},
     )
-    max_steps: int = field(default=500, metadata={"help": "How many optimizer update steps to take"})
+    max_steps: int = field(default=501, metadata={"help": "How many optimizer update steps to take"})
     warmup_ratio: float = field(default=0.03, metadata={"help": "Fraction of steps to do a warmup for"})
     save_steps: int = field(default=100, metadata={"help": "Save checkpoint every X updates steps."})
     logging_steps: int = field(default=10, metadata={"help": "Log every X updates steps."})
@@ -150,4 +150,18 @@ trainer = SFTTrainer(
     args=training_arguments,
 )
 
-trainer.train()
+trainer.train(resume_from_checkpoint=True)
+trainer.save_model(training_args.output_dir)
+
+output_dir = os.path.join(training_args.output_dir, "final_checkpoint")
+trainer.model.save_pretrained(output_dir)
+
+# Free memory for merging weights
+del model
+torch.cuda.empty_cache()
+
+model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", torch_dtype=torch.float32)
+model = model.merge_and_unload()
+
+output_merged_dir = os.path.join(training_args.output_dir, "final_merged_checkpoint")
+model.save_pretrained(output_merged_dir, safe_serialization=True)
